@@ -2,7 +2,6 @@ import argparse
 import time
 import numpy as np
 import placo
-import mujoco
 from placo_utils.visualization import robot_viz
 
 
