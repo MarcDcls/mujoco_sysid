@@ -25,12 +25,41 @@ class Actuator:
             self.name + "_forcerange": self.forcerange,
         }
 
-    def update(self, model: mujoco.MjModel):
+    def update_model(self, model: mujoco.MjModel):
         for id in self.dof_idx:
             model.dof_frictionloss[id + 6] = self.frictionloss.value
             model.dof_damping[id + 6] = self.damping.value
             model.dof_armature[id + 6] = self.armature.value
             model.actuator_forcerange[id] = [-self.forcerange.value, self.forcerange.value]
+
+
+class Body:
+    def __init__(
+        self,
+        name: str,
+        model: mujoco.MjModel,
+        com_x_offset: Parameter,
+        com_y_offset: Parameter,
+        com_z_offset: Parameter,
+    ):
+        self.name = name
+        self.body_id = model.body(name).id
+        self.com_x_offset = com_x_offset
+        self.com_y_offset = com_y_offset
+        self.com_z_offset = com_z_offset
+        self.initial_com = model.body_ipos[self.body_id].copy()
+
+    def get_parameters(self):
+        return {
+            self.name + "_com_x_offset": self.com_x_offset,
+            self.name + "_com_y_offset": self.com_y_offset,
+            self.name + "_com_z_offset": self.com_z_offset,
+        }
+
+    def update_model(self, model: mujoco.MjModel):
+        model.body_ipos[self.body_id, 0] = self.initial_com[0] + self.com_x_offset.value
+        model.body_ipos[self.body_id, 1] = self.initial_com[1] + self.com_y_offset.value
+        model.body_ipos[self.body_id, 2] = self.initial_com[2] + self.com_z_offset.value
             
 
 class MujocoModelWrapper:
@@ -43,14 +72,26 @@ class MujocoModelWrapper:
         model: mujoco.MjModel,
         data: mujoco.MjData,
         actuator: list[Actuator],
+        body: list[Body] = [],
     ):
         self.model = model
         self.data = data
         self.actuator = actuator
+        self.body = body
         
-    def update(self):
+    def get_parameters(self) -> dict[str, Parameter]:
+        params: dict[str, Parameter] = {}
         for act in self.actuator:
-            act.update(self.model)
+            params.update(act.get_parameters())
+        for body in self.body:
+            params.update(body.get_parameters())
+        return params
+    
+    def update_model(self):
+        for body in self.body:
+            body.update_model(self.model)
+        for act in self.actuator:
+            act.update_model(self.model)
         mujoco.mj_setConst(self.model, self.data)
 
 
@@ -134,10 +175,19 @@ if __name__ == "__main__":
         forcerange=Parameter(20.0, 5.0, 30.0),
     )
 
+    trunk_body = Body(
+        name="Trunk",
+        model=model,
+        com_x_offset=Parameter(0.0, -0.1, 0.1),
+        com_y_offset=Parameter(0.0, -0.1, 0.1),
+        com_z_offset=Parameter(0.0, -0.1, 0.1),
+    )
+
     wrapper = MujocoModelWrapper(
         model=model, 
         data=data, 
-        actuator=[
+        actuator=
+        [
             arm_actuator, 
             hip_roll_actuator, 
             hip_pitch_actuator, 
@@ -145,14 +195,26 @@ if __name__ == "__main__":
             knee_actuator, 
             ankle_roll_actuator, 
             ankle_pitch_actuator,
-            ],
-        )
+        ],
+        body=
+        [
+            trunk_body,
+        ],
+    )
+
+    print("Initial trunk COM: ", model.body_ipos[model.body("Trunk").id])
 
     for act in wrapper.actuator:
         for name, param in act.get_parameters().items():
             param.value = 0.1
-        act.update(model)
-    wrapper.update()
+        act.update_model(model)
+    for body in wrapper.body:
+        for name, param in body.get_parameters().items():
+            param.value = 0.05
+        body.update_model(model)
+    wrapper.update_model()
+
+    print("Updated trunk COM: ", model.body_ipos[model.body("Trunk").id])
 
     print("Friction loss: \n", model.dof_frictionloss)
     print("Damping: \n", model.dof_damping)
