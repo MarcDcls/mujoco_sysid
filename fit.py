@@ -19,24 +19,24 @@ from model_wrapper import Actuator, Body, MujocoModelWrapper, Parameter
 
 
 def build_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoModelWrapper:
-    arm_actuator = Actuator(
-        name="Arm",
-        model=model,
-        dof_names=[
-            "Left_Shoulder_Pitch",
-            "Right_Shoulder_Pitch",
-            "Left_Shoulder_Roll",
-            "Right_Shoulder_Roll",
-            "Left_Elbow_Pitch",
-            "Right_Elbow_Pitch",
-            "Left_Elbow_Yaw",
-            "Right_Elbow_Yaw",
-        ],
-        frictionloss=Parameter(0.001, 0.0, 1.0),
-        damping=Parameter(0.001, 0.0, 1.0),
-        armature=Parameter(0.001, 0.0, 1.0),
-        forcerange=Parameter(10.0, 5.0, 15.0),
-    )
+    # arm_actuator = Actuator(
+    #     name="Arm",
+    #     model=model,
+    #     dof_names=[
+    #         "Left_Shoulder_Pitch",
+    #         "Right_Shoulder_Pitch",
+    #         "Left_Shoulder_Roll",
+    #         "Right_Shoulder_Roll",
+    #         "Left_Elbow_Pitch",
+    #         "Right_Elbow_Pitch",
+    #         "Left_Elbow_Yaw",
+    #         "Right_Elbow_Yaw",
+    #     ],
+    #     frictionloss=Parameter(0.001, 0.0, 1.0),
+    #     damping=Parameter(0.001, 0.0, 1.0),
+    #     armature=Parameter(0.001, 0.0, 1.0),
+    #     forcerange=Parameter(10.0, 5.0, 15.0),
+    # )
 
     hip_roll_actuator = Actuator(
         name="Hip_Roll",
@@ -44,8 +44,8 @@ def build_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoModelWrap
         dof_names=["Left_Hip_Roll", "Right_Hip_Roll"],
         frictionloss=Parameter(0.001, 0.0, 1.0),
         damping=Parameter(0.001, 0.0, 1.0),
-        armature=Parameter(0.0339552, 0.0, 1.0),
-        forcerange=Parameter(30.0, 20.0, 45.0),
+        # armature=Parameter(0.0339552, 0.0, 1.0),
+        # forcerange=Parameter(30.0, 20.0, 45.0),
     )
 
     hip_pitch_actuator = Actuator(
@@ -54,8 +54,8 @@ def build_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoModelWrap
         dof_names=["Left_Hip_Pitch", "Right_Hip_Pitch"],
         frictionloss=Parameter(0.001, 0.0, 1.0),
         damping=Parameter(0.001, 0.0, 1.0),
-        armature=Parameter(0.0478125, 0.0, 1.0),
-        forcerange=Parameter(25.0, 15.0, 40.0),
+        # armature=Parameter(0.0478125, 0.0, 1.0),
+        # forcerange=Parameter(25.0, 15.0, 40.0),
     )
 
     hip_yaw_actuator = Actuator(
@@ -64,8 +64,8 @@ def build_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoModelWrap
         dof_names=["Left_Hip_Yaw", "Right_Hip_Yaw"],
         frictionloss=Parameter(0.001, 0.0, 1.0),
         damping=Parameter(0.001, 0.0, 1.0),
-        armature=Parameter(0.0282528, 0.0, 1.0),
-        forcerange=Parameter(20.0, 15.0, 35.0),
+        # armature=Parameter(0.0282528, 0.0, 1.0),
+        # forcerange=Parameter(20.0, 15.0, 35.0),
     )
 
     knee_actuator = Actuator(
@@ -74,8 +74,8 @@ def build_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoModelWrap
         dof_names=["Left_Knee_Pitch", "Right_Knee_Pitch"],
         frictionloss=Parameter(0.001, 0.0, 1.0),
         damping=Parameter(0.001, 0.0, 1.0),
-        armature=Parameter(0.095625, 0.0, 1.0),
-        forcerange=Parameter(45.0, 30.0, 55.0),
+        # armature=Parameter(0.095625, 0.0, 1.0),
+        # forcerange=Parameter(45.0, 30.0, 55.0),
     )
 
     ankle_roll_actuator = Actuator(
@@ -101,16 +101,16 @@ def build_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoModelWrap
     trunk_body = Body(
         name="Trunk",
         model=model,
-        com_x_offset=Parameter(0.0, -0.1, 0.1),
-        com_y_offset=Parameter(0.0, -0.1, 0.1),
-        com_z_offset=Parameter(0.0, -0.1, 0.1),
+        com_x_offset=Parameter(0.0, -0.05, 0.05),
+        com_y_offset=Parameter(0.0, -0.01, 0.01),
+        com_z_offset=Parameter(0.0, -0.08, 0.08),
     )
 
     return MujocoModelWrapper(
         model=model,
         data=data,
         actuator=[
-            arm_actuator,
+            # arm_actuator,
             hip_roll_actuator,
             hip_pitch_actuator,
             hip_yaw_actuator,
@@ -210,7 +210,7 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=1, help="Number of parallel worker processes.")
     parser.add_argument("--seed", type=int, default=0, help="Random seed.")
     parser.add_argument("--dt", type=float, default=0.005, help="Simulation timestep.")
-    parser.add_argument("--trunk_weight_ratio", type=float, default=0.1, help="Weight ratio in [0, 1] for trunk_angle_mse in final score. 0: joints only, 1: trunk only.")
+    parser.add_argument("--trunk_weight_ratio", type=float, default=0.5, help="Weight ratio in [0, 1] for trunk_angle_mse in final score. 0: joints only, 1: trunk only.")
     parser.add_argument("--sampler", choices=["cmaes", "tpe", "random"], default="cmaes", help="Optuna sampler.")
     parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
     parser.add_argument("--wandb-project", type=str, default="mujoco_sysid_fit", help="W&B project name.")
@@ -386,6 +386,7 @@ def main() -> None:
             for key, value in study_obj.best_params.items():
                 if isinstance(value, float):
                     wandb_log[f"params/{key}"] = float(value)
+
             wandb.log(wandb_log)
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)

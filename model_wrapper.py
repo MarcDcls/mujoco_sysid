@@ -9,7 +9,16 @@ class Parameter:
 
 
 class Actuator:
-    def __init__(self, name: str, model: mujoco.MjModel, dof_names: list[str], frictionloss: Parameter, damping: Parameter, armature: Parameter, forcerange: Parameter):
+    def __init__(
+            self, 
+        name: str, 
+        model: mujoco.MjModel, 
+        dof_names: list[str], 
+        frictionloss: Parameter | None = None,
+        damping: Parameter | None = None,
+        armature: Parameter | None = None,
+        forcerange: Parameter | None = None,
+    ):
         self.name = name
         self.dof_idx = [model.joint(name).id - 1 for name in dof_names]
         self.frictionloss = frictionloss
@@ -18,19 +27,27 @@ class Actuator:
         self.forcerange = forcerange
 
     def get_parameters(self):
-        return {
-            self.name + "_frictionloss": self.frictionloss,
-            self.name + "_damping": self.damping,
-            self.name + "_armature": self.armature,
-            self.name + "_forcerange": self.forcerange,
-        }
+        params = {}
+        if self.frictionloss is not None:
+            params[self.name + "_frictionloss"] = self.frictionloss
+        if self.damping is not None:
+            params[self.name + "_damping"] = self.damping
+        if self.armature is not None:
+            params[self.name + "_armature"] = self.armature
+        if self.forcerange is not None:
+            params[self.name + "_forcerange"] = self.forcerange
+        return params
 
     def update_model(self, model: mujoco.MjModel):
         for id in self.dof_idx:
-            model.dof_frictionloss[id + 6] = self.frictionloss.value
-            model.dof_damping[id + 6] = self.damping.value
-            model.dof_armature[id + 6] = self.armature.value
-            model.actuator_forcerange[id] = [-self.forcerange.value, self.forcerange.value]
+            if self.frictionloss is not None:
+                model.dof_frictionloss[id + 6] = self.frictionloss.value
+            if self.damping is not None:
+                model.dof_damping[id + 6] = self.damping.value
+            if self.armature is not None:
+                model.dof_armature[id + 6] = self.armature.value
+            if self.forcerange is not None:
+                model.actuator_forcerange[id] = [-self.forcerange.value, self.forcerange.value]
 
 
 class Body:
@@ -38,9 +55,9 @@ class Body:
         self,
         name: str,
         model: mujoco.MjModel,
-        com_x_offset: Parameter,
-        com_y_offset: Parameter,
-        com_z_offset: Parameter,
+        com_x_offset: Parameter | None = None,
+        com_y_offset: Parameter | None = None,
+        com_z_offset: Parameter | None = None,
     ):
         self.name = name
         self.body_id = model.body(name).id
@@ -50,16 +67,22 @@ class Body:
         self.initial_com = model.body_ipos[self.body_id].copy()
 
     def get_parameters(self):
-        return {
-            self.name + "_com_x_offset": self.com_x_offset,
-            self.name + "_com_y_offset": self.com_y_offset,
-            self.name + "_com_z_offset": self.com_z_offset,
-        }
+        params = {}
+        if self.com_x_offset is not None:
+            params[self.name + "_com_x_offset"] = self.com_x_offset
+        if self.com_y_offset is not None:
+            params[self.name + "_com_y_offset"] = self.com_y_offset
+        if self.com_z_offset is not None:
+            params[self.name + "_com_z_offset"] = self.com_z_offset
+        return params
 
     def update_model(self, model: mujoco.MjModel):
-        model.body_ipos[self.body_id, 0] = self.initial_com[0] + self.com_x_offset.value
-        model.body_ipos[self.body_id, 1] = self.initial_com[1] + self.com_y_offset.value
-        model.body_ipos[self.body_id, 2] = self.initial_com[2] + self.com_z_offset.value
+        if self.com_x_offset is not None:
+            model.body_ipos[self.body_id, 0] = self.initial_com[0] + self.com_x_offset.value
+        if self.com_y_offset is not None:
+            model.body_ipos[self.body_id, 1] = self.initial_com[1] + self.com_y_offset.value
+        if self.com_z_offset is not None:
+            model.body_ipos[self.body_id, 2] = self.initial_com[2] + self.com_z_offset.value
             
 
 class MujocoModelWrapper:
