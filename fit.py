@@ -1,13 +1,21 @@
 import argparse
+from datetime import datetime
+import importlib.util
 import json
+import socket
+import sqlite3
+import time
+from multiprocessing import Process
 from pathlib import Path
+
 import mujoco
 import numpy as np
 import optuna
-import placo
+from optuna.storages import RDBStorage
+from optuna.trial import TrialState
 
 import simulate
-from model_wrapper import Actuator, MujocoModelWrapper, Parameter
+from model_wrapper import Actuator, Body, MujocoModelWrapper, Parameter
 
 
 def build_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoModelWrapper:
@@ -106,19 +114,24 @@ def build_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoModelWrap
 
 
 def list_log_files(logs_dir: Path) -> list[Path]:
-    files = sorted(logs_dir.rglob("model.log"))
-    if not files:
-        files = sorted(logs_dir.rglob("*.log"))
-    return files
+    return sorted(logs_dir.rglob("model.log"))
 
 
-def load_histories(log_paths: list[Path]) -> list[placo.HistoryCollection]:
-    histories: list[placo.HistoryCollection] = []
+def load_logs(
+    log_paths: list[Path],
+    model: mujoco.MjModel,
+    dt: float,
+) -> list[simulate.Log]:
+    logs: list[simulate.Log] = []
     for log_path in log_paths:
-        history = placo.HistoryCollection()
-        history.loadReplays(str(log_path))
-        histories.append(history)
-    return histories
+        logs.append(
+            simulate.Log(
+                str(log_path),
+                model=model,
+                dt=dt,
+            )
+        )
+    return logs
 
 
 def apply_values(params: dict[str, Parameter], values: dict[str, float]) -> None:
@@ -126,47 +139,82 @@ def apply_values(params: dict[str, Parameter], values: dict[str, float]) -> None
         params[name].value = float(value)
 
 
+def weighted_score(joint_mse: float, trunk_angle_mse: float, trunk_weight_ratio: float) -> float:
+    return (1.0 - trunk_weight_ratio) * joint_mse + trunk_weight_ratio * trunk_angle_mse
+
+
+def prepare_sqlite_storage(storage_url: str) -> None:
+    sqlite_prefix = "sqlite:///"
+    if not storage_url.startswith(sqlite_prefix):
+        return
+
+    db_path = storage_url[len(sqlite_prefix):]
+    connection = sqlite3.connect(db_path, timeout=60.0)
+    try:
+        connection.execute("PRAGMA journal_mode=WAL;")
+        connection.execute("PRAGMA synchronous=NORMAL;")
+        connection.execute("PRAGMA busy_timeout=60000;")
+    finally:
+        connection.close()
+
+
 def evaluate_values(
     model: mujoco.MjModel,
     data: mujoco.MjData,
     wrapper: MujocoModelWrapper,
     params: dict[str, Parameter],
-    histories: list[placo.HistoryCollection],
+    logs: list[simulate.Log],
     values: dict[str, float],
-    dt: float,
-    support_foot: str,
-) -> tuple[float, list[float]]:
+    trunk_weight_ratio: float,
+) -> tuple[float, list[float], float, float]:
     apply_values(params, values)
     wrapper.update_model()
 
     per_log_scores: list[float] = []
-    for history in histories:
-        score_mse, _ = simulate.simulate(
-            model=model,
-            data=data,
-            history=history,
-            dt=dt,
-            use_viewer=False,
-            support_foot=support_foot,
+    per_log_joint_mse: list[float] = []
+    per_log_trunk_angle_mse: list[float] = []
+    for log in logs:
+        joint_mse, trunk_angle_mse = log.simulate(model=model, data=data, use_viewer=False)
+        per_log_joint_mse.append(float(joint_mse))
+        per_log_trunk_angle_mse.append(float(trunk_angle_mse))
+        score_mse = weighted_score(
+            joint_mse=float(joint_mse),
+            trunk_angle_mse=float(trunk_angle_mse),
+            trunk_weight_ratio=trunk_weight_ratio,
         )
         per_log_scores.append(float(score_mse))
 
-    return float(np.mean(per_log_scores)), per_log_scores
+    return (
+        float(np.mean(per_log_scores)),
+        per_log_scores,
+        float(np.mean(per_log_joint_mse)),
+        float(np.mean(per_log_trunk_angle_mse)),
+    )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fit MuJoCo model parameters on a directory of logs.")
-    parser.add_argument("--logs-dir", type=str, required=True, help="Directory containing logs (model.log).")
-    parser.add_argument("--trials", type=int, default=100000, help="Number of Optuna trials.")
+    parser.add_argument("--logs", type=str, required=True, help="Directory containing logs (model.log).")
+    parser.add_argument("--trials", type=int, default=1000000, help="Number of Optuna trials.")
+    parser.add_argument("--workers", type=int, default=1, help="Number of parallel worker processes.")
     parser.add_argument("--seed", type=int, default=0, help="Random seed.")
     parser.add_argument("--dt", type=float, default=0.005, help="Simulation timestep.")
-    parser.add_argument("--support-foot", choices=["left", "right"], default="left")
-    parser.add_argument("--sampler", choices=["cmaes", "tpe"], default="cmaes", help="Optuna sampler.")
+    parser.add_argument("--trunk_weight_ratio", type=float, default=0.1, help="Weight ratio in [0, 1] for trunk_angle_mse in final score. 0: joints only, 1: trunk only.")
+    parser.add_argument("--sampler", choices=["cmaes", "tpe", "random"], default="cmaes", help="Optuna sampler.")
+    parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+    parser.add_argument("--wandb-project", type=str, default="mujoco_sysid_fit", help="W&B project name.")
+    parser.add_argument("--study-storage", type=str, default="sqlite:///study.db", help="Optuna storage URL (used when --workers > 1).")
+    parser.add_argument("--study-name", type=str, default=None, help="Optuna study name (auto-generated if omitted).")
     parser.add_argument("--model", type=str, default="../humanoid_model/k1/scene.xml", help="Path to MuJoCo scene XML.")
     parser.add_argument("--output", type=str, default="params.json", help="Output JSON file for best parameters.")
     args = parser.parse_args()
 
-    logs_dir = Path(args.logs_dir)
+    if not (0.0 <= args.trunk_weight_ratio <= 1.0):
+        raise ValueError(f"--trunk_weight_ratio must be in [0, 1], got: {args.trunk_weight_ratio}")
+    if args.workers < 1:
+        raise ValueError(f"--workers must be >= 1, got: {args.workers}")
+
+    logs_dir = Path(args.logs)
     if not logs_dir.exists():
         raise FileNotFoundError(f"Logs directory does not exist: {logs_dir}")
 
@@ -178,63 +226,207 @@ def main() -> None:
     for path in log_paths:
         print(f"  - {path}")
 
-    histories = load_histories(log_paths)
-
     model = mujoco.MjModel.from_xml_path(args.model)
     data = mujoco.MjData(model)
     wrapper = build_wrapper(model, data)
     params = wrapper.get_parameters()
+    logs = load_logs(
+        log_paths,
+        model=model,
+        dt=args.dt,
+    )
 
     baseline_values = {name: float(parameter.value) for name, parameter in params.items()}
 
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    wandb_run = None
+    if args.wandb:
+        import wandb
+        wandb_run = wandb.init(
+            project=args.wandb_project,
+            name=output_path.stem,
+            config={
+                "logs": str(logs_dir),
+                "model": args.model,
+                "hostname": socket.gethostname(),
+                "sampler": args.sampler,
+                "trials": args.trials,
+                "workers": args.workers,
+                "dt": args.dt,
+                "trunk_weight_ratio": args.trunk_weight_ratio,
+                "study_storage": args.study_storage if args.workers > 1 else None,
+            },
+        )
+
     if args.sampler == "cmaes":
-        sampler: optuna.samplers.BaseSampler = optuna.samplers.CmaEsSampler(restart_strategy="bipop")
+        if importlib.util.find_spec("cmaes") is None:
+            print("[fit] 'cmaes' package not found, fallback to TPE sampler.")
+            sampler: optuna.samplers.BaseSampler = optuna.samplers.TPESampler(seed=args.seed)
+        else:
+            sampler = optuna.samplers.CmaEsSampler(seed=args.seed)
+    elif args.sampler == "tpe":
+        sampler = optuna.samplers.TPESampler(seed=args.seed)
     elif args.sampler == "random":
-        sampler = optuna.samplers.RandomSampler()
-    elif args.sampler == "nsgaii":
-        sampler = optuna.samplers.NSGAIISampler()
+        sampler = optuna.samplers.RandomSampler(seed=args.seed)
     else:
         raise ValueError(f"Unknown sampler: {args.sampler}")
 
-    study = optuna.create_study(direction="minimize", sampler=sampler)
-    study.enqueue_trial(baseline_values)
+    if args.workers > 1:
+        prepare_sqlite_storage(args.study_storage)
+        storage = RDBStorage(
+            url=args.study_storage,
+            engine_kwargs={"connect_args": {"timeout": 60}},
+        )
+        study_name = args.study_name or f"study_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        study = optuna.create_study(
+            direction="minimize",
+            sampler=sampler,
+            study_name=study_name,
+            storage=storage,
+            load_if_exists=True,
+        )
+    else:
+        study_name = args.study_name
+        study = optuna.create_study(direction="minimize", sampler=sampler)
+
+    if len(study.trials) == 0:
+        study.enqueue_trial(baseline_values)
 
     def objective(trial: optuna.Trial) -> float:
         values: dict[str, float] = {}
         for name, parameter in params.items():
             values[name] = trial.suggest_float(name, parameter.min, parameter.max)
 
-        mean_score, per_log_scores = evaluate_values(
+        mean_score, per_log_scores, mean_joint_mse, mean_trunk_angle_mse = evaluate_values(
             model=model,
             data=data,
             wrapper=wrapper,
             params=params,
-            histories=histories,
+            logs=logs,
             values=values,
-            dt=args.dt,
-            support_foot=args.support_foot,
+            trunk_weight_ratio=args.trunk_weight_ratio,
         )
 
-        for path, score in zip(log_paths, per_log_scores):
-            trial.set_user_attr(f"mse:{path}", float(score))
+        if args.workers == 1:
+            for path, score in zip(log_paths, per_log_scores):
+                trial.set_user_attr(f"mse:{path}", float(score))
+
+        if wandb_run is not None:
+            wandb.log(
+                {
+                    "optim/trial_mse": float(mean_score),
+                    "optim/trial_rmse": float(np.sqrt(mean_score)),
+                    "optim/trial_joint_rmse": float(np.sqrt(mean_joint_mse)),
+                    "optim/trial_trunk_angle_rmse": float(np.sqrt(mean_trunk_angle_mse)),
+                    "optim/trial_number": int(trial.number),
+                }
+            )
 
         print(f"Trial {trial.number}/{args.trials - 1}: mean_mse={mean_score:.8f}")
         return float(mean_score)
 
-    study.optimize(objective, n_trials=args.trials)
+    last_log_time = 0.0
+    def save_best_snapshot(study_obj: optuna.Study) -> None:
+        if study_obj.best_trial is None:
+            return
+        snapshot = {
+            "best_mean_mse": float(study_obj.best_value),
+            "best_rmse": float(np.sqrt(study_obj.best_value)),
+            "best_parameters": {name: float(value) for name, value in study_obj.best_params.items()},
+            "meta": {
+                "logs_dir": str(logs_dir),
+                "nb_logs": len(log_paths),
+                "trials": args.trials,
+                "workers": args.workers,
+                "seed": args.seed,
+                "sampler": args.sampler,
+                "dt": args.dt,
+                "trunk_weight_ratio": args.trunk_weight_ratio,
+                "model": args.model,
+                "wandb": args.wandb,
+                "study_storage": args.study_storage if args.workers > 1 else None,
+                "study_name": study_name,
+            },
+        }
+        with output_path.open("w") as file:
+            json.dump(snapshot, file, indent=2)
+
+    def monitor(study_obj: optuna.Study, trial: optuna.Trial) -> None:
+        nonlocal last_log_time, wandb_run
+        now = time.time()
+        if now - last_log_time < 0.2:
+            return
+        last_log_time = now
+
+        if study_obj.best_trial is None:
+            return
+
+        save_best_snapshot(study_obj)
+
+        print(f"[Trial {trial.number}] best_mse={study_obj.best_value:.8f}")
+
+        if wandb_run is not None:
+            wandb_log = {
+                "optim/best_value": float(study_obj.best_value),
+                "optim/trial_number": int(trial.number),
+            }
+            for key, value in study_obj.best_params.items():
+                if isinstance(value, float):
+                    wandb_log[f"params/{key}"] = float(value)
+            wandb.log(wandb_log)
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    max_trials_callback = optuna.study.MaxTrialsCallback(args.trials, states=(TrialState.COMPLETE,))
+
+    def run_worker(enable_monitoring: bool) -> None:
+        worker_study = study
+        if args.workers > 1:
+            worker_storage = RDBStorage(
+                url=args.study_storage,
+                engine_kwargs={"connect_args": {"timeout": 60}},
+            )
+            worker_study = optuna.load_study(study_name=study_name, storage=worker_storage)
+
+        callbacks: list = [max_trials_callback]
+        if enable_monitoring:
+            callbacks.append(monitor)
+
+        worker_study.optimize(objective, n_trials=None, n_jobs=1, callbacks=callbacks)
+
+    worker_processes: list[Process] = []
+    if args.workers > 1:
+        for _ in range(args.workers - 1):
+            process = Process(target=run_worker, args=(False,))
+            process.start()
+            worker_processes.append(process)
+
+    run_worker(True)
+
+    for process in worker_processes:
+        process.join()
+
+    if args.workers > 1:
+        final_storage = RDBStorage(
+            url=args.study_storage,
+            engine_kwargs={"connect_args": {"timeout": 60}},
+        )
+        study = optuna.load_study(study_name=study_name, storage=final_storage)
+
+    save_best_snapshot(study)
 
     best_values = {name: float(value) for name, value in study.best_params.items()}
     best_score = float(study.best_value)
 
-    best_score, best_per_log = evaluate_values(
+    best_score, best_per_log, best_joint_mse, best_trunk_angle_mse = evaluate_values(
         model=model,
         data=data,
         wrapper=wrapper,
         params=params,
-        histories=histories,
+        logs=logs,
         values=best_values,
-        dt=args.dt,
-        support_foot=args.support_foot,
+        trunk_weight_ratio=args.trunk_weight_ratio,
     )
 
     output = {
@@ -246,18 +438,31 @@ def main() -> None:
             "logs_dir": str(logs_dir),
             "nb_logs": len(log_paths),
             "trials": args.trials,
+            "workers": args.workers,
             "seed": args.seed,
             "sampler": args.sampler,
             "dt": args.dt,
-            "support_foot": args.support_foot,
+            "trunk_weight_ratio": args.trunk_weight_ratio,
             "model": args.model,
+            "wandb": args.wandb,
+            "study_storage": args.study_storage if args.workers > 1 else None,
+            "study_name": study_name,
         },
     }
 
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w") as file:
         json.dump(output, file, indent=2)
+
+    if wandb_run is not None:
+        wandb.log(
+            {
+                "optim/best_value": float(best_score),
+                "optim/best_rmse": float(np.sqrt(best_score)),
+                "optim/best_joint_rmse": float(np.sqrt(best_joint_mse)),
+                "optim/best_trunk_angle_rmse": float(np.sqrt(best_trunk_angle_mse)),
+            }
+        )
+        wandb_run.finish()
 
     print(f"Best mean_mse={best_score:.8f}, rmse={np.sqrt(best_score):.8f}")
     print(f"Saved best parameters to {output_path}")
