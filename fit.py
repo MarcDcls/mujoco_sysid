@@ -98,6 +98,14 @@ def build_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoModelWrap
         forcerange=Parameter(20.0, 5.0, 30.0),
     )
 
+    trunk_body = Body(
+        name="Trunk",
+        model=model,
+        com_x_offset=Parameter(0.0, -0.1, 0.1),
+        com_y_offset=Parameter(0.0, -0.1, 0.1),
+        com_z_offset=Parameter(0.0, -0.1, 0.1),
+    )
+
     return MujocoModelWrapper(
         model=model,
         data=data,
@@ -109,6 +117,9 @@ def build_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoModelWrap
             knee_actuator,
             ankle_roll_actuator,
             ankle_pitch_actuator,
+        ],
+        body=[
+            trunk_body,
         ],
     )
 
