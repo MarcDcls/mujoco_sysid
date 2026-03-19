@@ -1,5 +1,5 @@
 [project]
-name = "identification"
+name = "mujoco_sysid"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -9,7 +9,7 @@ dependencies = [
     "ipdb>=0.13.13",
     "matplotlib>=3.10.8",
     "meshcat>=0.3.2",
-    "mujoco>=3.6.0",
+    "mujoco>=3.0.0",
     "numpy<2",
     "optuna>=4.2.1",
     "pyqt5>=5.15.11",
