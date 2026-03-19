@@ -152,7 +152,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Generate and play a push-up trajectory.")
-    parser.add_argument("--hand_spread", type=float, default=0.55, help="Lateral distance between hands (metres).")
+    parser.add_argument("--hand_spread", type=float, default=0.6, help="Lateral distance between hands (metres).")
     parser.add_argument("--hand_x_offset", type=float, default=0.7, help="Horizontal offset of hands from the center (metres).")
     parser.add_argument("--foot_spread", type=float, default=0.3, help="Lateral distance between feet (metres).")
     parser.add_argument("--push_up_amplitude", type=float, default=0.17, help="Half-amplitude of COM vertical oscillation (metres).")

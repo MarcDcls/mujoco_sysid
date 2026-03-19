@@ -19,24 +19,24 @@ from model_wrapper import Actuator, Body, MujocoModelWrapper, Parameter
 
 
 def build_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoModelWrapper:
-    # arm_actuator = Actuator(
-    #     name="Arm",
-    #     model=model,
-    #     dof_names=[
-    #         "Left_Shoulder_Pitch",
-    #         "Right_Shoulder_Pitch",
-    #         "Left_Shoulder_Roll",
-    #         "Right_Shoulder_Roll",
-    #         "Left_Elbow_Pitch",
-    #         "Right_Elbow_Pitch",
-    #         "Left_Elbow_Yaw",
-    #         "Right_Elbow_Yaw",
-    #     ],
-    #     frictionloss=Parameter(0.001, 0.0, 1.0),
-    #     damping=Parameter(0.001, 0.0, 1.0),
-    #     armature=Parameter(0.001, 0.0, 1.0),
-    #     forcerange=Parameter(10.0, 5.0, 15.0),
-    # )
+    arm_actuator = Actuator(
+        name="Arm",
+        model=model,
+        dof_names=[
+            "Left_Shoulder_Pitch",
+            "Right_Shoulder_Pitch",
+            "Left_Shoulder_Roll",
+            "Right_Shoulder_Roll",
+            "Left_Elbow_Pitch",
+            "Right_Elbow_Pitch",
+            "Left_Elbow_Yaw",
+            "Right_Elbow_Yaw",
+        ],
+        frictionloss=Parameter(0.001, 0.0, 1.0),
+        damping=Parameter(0.001, 0.0, 1.0),
+        armature=Parameter(0.001, 0.0, 1.0),
+        forcerange=Parameter(10.0, 5.0, 15.0),
+    )
 
     hip_roll_actuator = Actuator(
         name="Hip_Roll",
@@ -110,13 +110,13 @@ def build_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoModelWrap
         model=model,
         data=data,
         actuator=[
-            # arm_actuator,
-            hip_roll_actuator,
-            hip_pitch_actuator,
-            hip_yaw_actuator,
-            knee_actuator,
-            ankle_roll_actuator,
-            ankle_pitch_actuator,
+            arm_actuator,
+            # hip_roll_actuator,
+            # hip_pitch_actuator,
+            # hip_yaw_actuator,
+            # knee_actuator,
+            # ankle_roll_actuator,
+            # ankle_pitch_actuator,
         ],
         body=[
             trunk_body,
@@ -210,7 +210,7 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=1, help="Number of parallel worker processes.")
     parser.add_argument("--seed", type=int, default=0, help="Random seed.")
     parser.add_argument("--dt", type=float, default=0.005, help="Simulation timestep.")
-    parser.add_argument("--trunk_weight_ratio", type=float, default=0.5, help="Weight ratio in [0, 1] for trunk_angle_mse in final score. 0: joints only, 1: trunk only.")
+    parser.add_argument("--trunk_weight_ratio", type=float, default=0.0, help="Weight ratio in [0, 1] for trunk_angle_mse in final score. 0: joints only, 1: trunk only.")
     parser.add_argument("--sampler", choices=["cmaes", "tpe", "random"], default="cmaes", help="Optuna sampler.")
     parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
     parser.add_argument("--wandb-project", type=str, default="mujoco_sysid_fit", help="W&B project name.")
@@ -302,7 +302,7 @@ def main() -> None:
         study_name = args.study_name
         study = optuna.create_study(direction="minimize", sampler=sampler)
 
-    if len(study.trials) == 0:
+    if len(study.trials) == 0 and args.workers == 1:
         study.enqueue_trial(baseline_values)
 
     def objective(trial: optuna.Trial) -> float:
@@ -405,7 +405,15 @@ def main() -> None:
         if enable_monitoring:
             callbacks.append(monitor)
 
-        worker_study.optimize(objective, n_trials=None, n_jobs=1, callbacks=callbacks)
+        while True:
+            try:
+                worker_study.optimize(objective, n_trials=None, n_jobs=1, callbacks=callbacks)
+                break
+            except ValueError as error:
+                if "Cannot tell a COMPLETE trial." not in str(error):
+                    raise
+                print("[fit] Detected Optuna trial state race, retrying worker loop.")
+                time.sleep(0.1)
 
     worker_processes: list[Process] = []
     if args.workers > 1:
