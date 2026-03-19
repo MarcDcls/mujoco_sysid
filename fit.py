@@ -131,6 +131,7 @@ def list_log_files(logs_dir: Path) -> list[Path]:
 def load_logs(
     log_paths: list[Path],
     model: mujoco.MjModel,
+    tracked_joints: list[str],
     dt: float,
 ) -> list[simulate.Log]:
     logs: list[simulate.Log] = []
@@ -139,6 +140,7 @@ def load_logs(
             simulate.Log(
                 str(log_path),
                 model=model,
+                tracked_joints=tracked_joints,
                 dt=dt,
             )
         )
@@ -244,6 +246,10 @@ def main() -> None:
     logs = load_logs(
         log_paths,
         model=model,
+        tracked_joints=[
+            "Shoulder",
+            "Elbow",
+        ],
         dt=args.dt,
     )
 

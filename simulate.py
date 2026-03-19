@@ -13,6 +13,7 @@ class Log:
         self,
         log_path: str,
         model: mujoco.MjModel,
+        tracked_joints: list[str],
         dt: float = 0.002,
     ):
         self.log_path = str(log_path)
@@ -48,8 +49,10 @@ class Log:
             joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, actuator_name)
             self.actuator_qpos_adr.append(int(model.jnt_qposadr[joint_id]))
 
-            if not actuator_name.startswith("Head_"):
-                self.tracked_actuator_ids.append(actuator_id)
+            for tracked_joint in tracked_joints:
+                if tracked_joint in actuator_name:
+                    self.tracked_actuator_ids.append(actuator_id)
+                    break
 
         self.q_targets = np.zeros((len(self.ts), model.nu))
         self.q_refs = np.zeros((len(self.ts), model.nu))
@@ -196,6 +199,10 @@ def main() -> None:
     log = Log(
         str(Path(args.log_path)),
         model=model,
+        tracked_joints=[
+            "Shoulder",
+            "Elbow",
+        ],
         dt=args.dt,
     )
 
