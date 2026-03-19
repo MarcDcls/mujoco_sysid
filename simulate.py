@@ -41,8 +41,9 @@ class Log:
             actuator_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_id)
             self.actuator_names.append(actuator_name)
 
-            self.kp[actuator_id] = float(history.number(f"kp:{actuator_name}", self.t0))
-            self.kd[actuator_id] = float(history.number(f"kd:{actuator_name}", self.t0))
+            gain_time = 0.5 * (self.t0 + self.t1)
+            self.kp[actuator_id] = float(history.number(f"kp:{actuator_name}", gain_time))
+            self.kd[actuator_id] = float(history.number(f"kd:{actuator_name}", gain_time))
 
             joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, actuator_name)
             self.actuator_qpos_adr.append(int(model.jnt_qposadr[joint_id]))
@@ -90,6 +91,7 @@ class Log:
 
     def _reset(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         data.qpos[self.actuator_qpos_adr] = self.q_refs[0]
+        data.ctrl[:] = self.q_targets[0]
         data.qpos[0:3] = self.base_pos
         data.qpos[3:7] = self.base_quat
         data.qvel[:] = 0.0
