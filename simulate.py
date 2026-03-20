@@ -1,4 +1,5 @@
 import argparse
+import json
 import time
 from pathlib import Path
 import re
@@ -8,6 +9,137 @@ import mujoco.viewer
 import numpy as np
 import placo
 import onnxruntime as ort
+
+from model_wrapper import Actuator, Body, MujocoModelWrapper, Parameter
+
+
+def build_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoModelWrapper:
+    arm_actuator = Actuator(
+        name="Arm",
+        model=model,
+        dof_names=[
+            "Left_Shoulder_Pitch",
+            "Right_Shoulder_Pitch",
+            "Left_Shoulder_Roll",
+            "Right_Shoulder_Roll",
+            "Left_Elbow_Pitch",
+            "Right_Elbow_Pitch",
+            "Left_Elbow_Yaw",
+            "Right_Elbow_Yaw",
+        ],
+        frictionloss=Parameter(0.001, 0.0, 1.0),
+        damping=Parameter(0.001, 0.0, 1.0),
+        armature=Parameter(0.001, 0.0, 1.0),
+        forcerange=Parameter(10.0, 5.0, 15.0),
+    )
+
+    hip_roll_actuator = Actuator(
+        name="Hip_Roll",
+        model=model,
+        dof_names=["Left_Hip_Roll", "Right_Hip_Roll"],
+        frictionloss=Parameter(0.001, 0.0, 1.0),
+        damping=Parameter(0.001, 0.0, 1.0),
+    )
+
+    hip_pitch_actuator = Actuator(
+        name="Hip_Pitch",
+        model=model,
+        dof_names=["Left_Hip_Pitch", "Right_Hip_Pitch"],
+        frictionloss=Parameter(0.001, 0.0, 1.0),
+        damping=Parameter(0.001, 0.0, 1.0),
+    )
+
+    hip_yaw_actuator = Actuator(
+        name="Hip_Yaw",
+        model=model,
+        dof_names=["Left_Hip_Yaw", "Right_Hip_Yaw"],
+        frictionloss=Parameter(0.001, 0.0, 1.0),
+        damping=Parameter(0.001, 0.0, 1.0),
+    )
+
+    knee_actuator = Actuator(
+        name="Knee",
+        model=model,
+        dof_names=["Left_Knee_Pitch", "Right_Knee_Pitch"],
+        frictionloss=Parameter(0.001, 0.0, 1.0),
+        damping=Parameter(0.001, 0.0, 1.0),
+    )
+
+    ankle_roll_actuator = Actuator(
+        name="Ankle_Roll",
+        model=model,
+        dof_names=["Left_Ankle_Roll", "Right_Ankle_Roll"],
+        frictionloss=Parameter(0.001, 0.0, 1.0),
+        damping=Parameter(0.001, 0.0, 1.0),
+        armature=Parameter(0.0565, 0.0, 1.0),
+        forcerange=Parameter(20.0, 5.0, 30.0),
+    )
+
+    ankle_pitch_actuator = Actuator(
+        name="Ankle_Pitch",
+        model=model,
+        dof_names=["Left_Ankle_Pitch", "Right_Ankle_Pitch"],
+        frictionloss=Parameter(0.001, 0.0, 1.0),
+        damping=Parameter(0.001, 0.0, 1.0),
+        armature=Parameter(0.0565, 0.0, 1.0),
+        forcerange=Parameter(20.0, 5.0, 30.0),
+    )
+
+    trunk_body = Body(
+        name="Trunk",
+        model=model,
+        com_x_offset=Parameter(0.0, -0.05, 0.05),
+        com_y_offset=Parameter(0.0, -0.01, 0.01),
+        com_z_offset=Parameter(0.0, -0.08, 0.08),
+    )
+
+    return MujocoModelWrapper(
+        model=model,
+        data=data,
+        actuator=[
+            arm_actuator,
+            hip_roll_actuator,
+            hip_pitch_actuator,
+            hip_yaw_actuator,
+            knee_actuator,
+            ankle_roll_actuator,
+            ankle_pitch_actuator,
+        ],
+        body=[
+            trunk_body,
+        ],
+    )
+
+
+def load_saved_parameters(json_path: str) -> dict[str, float]:
+    with open(json_path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Invalid parameters file format: expected JSON object in '{json_path}'")
+
+    values_raw = payload.get("best_parameters", payload)
+    if not isinstance(values_raw, dict):
+        raise RuntimeError(f"Invalid parameters file format: expected object for 'best_parameters' in '{json_path}'")
+
+    values: dict[str, float] = {}
+    for name, value in values_raw.items():
+        values[name] = float(value)
+    return values
+
+
+def apply_saved_parameters(model: mujoco.MjModel, data: mujoco.MjData, values: dict[str, float]) -> None:
+    wrapper = build_wrapper(model=model, data=data)
+    params = wrapper.get_parameters()
+
+    unknown = [name for name in values if name not in params]
+    if unknown:
+        raise RuntimeError(f"Unknown parameter(s) in JSON: {', '.join(sorted(unknown))}")
+
+    for name, value in values.items():
+        params[name].value = float(value)
+
+    wrapper.update_model()
 
 class Log:
     POLICY_MASKED_DOFS = {"Head_Yaw", "Head_Pitch"}
@@ -229,6 +361,19 @@ class Log:
         self.imu_gyro_obs_buffer.append(gyro)
         self.imu_gravity_obs_buffer.append(gravity_trunk)
 
+        max_keep = max(self.joint_obs_delay_steps, self.imu_obs_delay_steps) + 1
+        if len(self.joint_pos_obs_buffer) > max_keep:
+            del self.joint_pos_obs_buffer[:-max_keep]
+            del self.joint_vel_obs_buffer[:-max_keep]
+            del self.imu_gyro_obs_buffer[:-max_keep]
+            del self.imu_gravity_obs_buffer[:-max_keep]
+
+    def _clear_observation_buffers(self) -> None:
+        self.joint_pos_obs_buffer.clear()
+        self.joint_vel_obs_buffer.clear()
+        self.imu_gyro_obs_buffer.clear()
+        self.imu_gravity_obs_buffer.clear()
+
     def _build_policy_observation(self, data: mujoco.MjData, sample_idx: int) -> np.ndarray:
         if self.policy_last_action is None:
             raise RuntimeError("Policy action state is not initialized")
@@ -393,6 +538,7 @@ class Log:
                 viewer_ctx = mujoco.viewer.launch_passive(model, data)
 
             self._reset(model, data)
+            self._clear_observation_buffers()
 
             t_start = time.perf_counter()
             self.last_infer_time = t_start
@@ -415,8 +561,6 @@ class Log:
                             next_infer_elapsed += infer_period
 
                 if self.agent is not None:
-                    if self.policy_last_action is None:
-                        raise RuntimeError("Policy action state is not initialized")
                     current_ctrl = self._compose_policy_targets(i, self.policy_last_action)
                 else:
                     current_ctrl = self.q_targets[i]
@@ -461,10 +605,17 @@ def main() -> None:
     parser.add_argument("--infer_frequency", type=float, default=50, help="Policy inference frequency in Hz (0 means every step).")
     parser.add_argument("--joint_obs_delay_ms", type=float, default=0, help="Delay applied to joint observations for policy inference (ms).")
     parser.add_argument("--imu_obs_delay_ms", type=float, default=0, help="Delay applied to IMU/gyro observations for policy inference (ms).")
+    parser.add_argument("--params_json", type=str, default=None, help="Path to JSON file containing saved model parameters (e.g. params.json).")
     args = parser.parse_args()
 
     model = mujoco.MjModel.from_xml_path(args.model)
     data = mujoco.MjData(model)
+
+    if args.params_json is not None:
+        values = load_saved_parameters(args.params_json)
+        apply_saved_parameters(model=model, data=data, values=values)
+        print(f"Loaded {len(values)} model parameters from {args.params_json}")
+
     log = Log(
         str(Path(args.log_path)),
         model=model,
