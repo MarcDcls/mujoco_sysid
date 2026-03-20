@@ -111,12 +111,12 @@ def build_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoModelWrap
         data=data,
         actuator=[
             arm_actuator,
-            # hip_roll_actuator,
-            # hip_pitch_actuator,
-            # hip_yaw_actuator,
-            # knee_actuator,
-            # ankle_roll_actuator,
-            # ankle_pitch_actuator,
+            hip_roll_actuator,
+            hip_pitch_actuator,
+            hip_yaw_actuator,
+            knee_actuator,
+            ankle_roll_actuator,
+            ankle_pitch_actuator,
         ],
         body=[
             trunk_body,
@@ -130,6 +130,7 @@ def list_log_files(logs_dir: Path) -> list[Path]:
 
 def load_logs(
     log_paths: list[Path],
+    agent_log_paths: list[Path],
     model: mujoco.MjModel,
     tracked_joints: list[str],
     dt: float,
@@ -142,6 +143,16 @@ def load_logs(
                 model=model,
                 tracked_joints=tracked_joints,
                 dt=dt,
+            )
+        )
+    for log_path in agent_log_paths:
+        logs.append(
+            simulate.Log(
+                str(log_path),
+                model=model,
+                tracked_joints=tracked_joints,
+                dt=dt,
+                agent_path="walk.onnx",
             )
         )
     return logs
@@ -207,7 +218,8 @@ def evaluate_values(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fit MuJoCo model parameters on a directory of logs.")
-    parser.add_argument("--logs", type=str, required=True, help="Directory containing logs (model.log).")
+    parser.add_argument("--logs", type=str, required=None, help="Directory containing logs (model.log).")
+    parser.add_argument("--agent-logs", type=str, default=None, help="Directory containing logs to run with a walk agent.")
     parser.add_argument("--trials", type=int, default=1000000, help="Number of Optuna trials.")
     parser.add_argument("--workers", type=int, default=1, help="Number of parallel worker processes.")
     parser.add_argument("--seed", type=int, default=0, help="Random seed.")
@@ -227,17 +239,19 @@ def main() -> None:
     if args.workers < 1:
         raise ValueError(f"--workers must be >= 1, got: {args.workers}")
 
-    logs_dir = Path(args.logs)
-    if not logs_dir.exists():
-        raise FileNotFoundError(f"Logs directory does not exist: {logs_dir}")
+    log_paths = []
+    if args.logs:
+        logs_dir = Path(args.logs)
+        if logs_dir.exists():
+            log_paths = list_log_files(logs_dir)
 
-    log_paths = list_log_files(logs_dir)
-    if not log_paths:
-        raise RuntimeError(f"No log files found under: {logs_dir}")
+    agent_log_paths = []
+    if args.agent_logs:
+        agent_logs_dir = Path(args.agent_logs)
+        if agent_logs_dir.exists():
+            agent_log_paths = list_log_files(agent_logs_dir)
 
-    print(f"Found {len(log_paths)} logs")
-    for path in log_paths:
-        print(f"  - {path}")
+    print(f"Found {len(log_paths)} logs without agent, {len(agent_log_paths)} logs with agent.")
 
     model = mujoco.MjModel.from_xml_path(args.model)
     data = mujoco.MjData(model)
@@ -245,10 +259,14 @@ def main() -> None:
     params = wrapper.get_parameters()
     logs = load_logs(
         log_paths,
+        agent_log_paths,
         model=model,
         tracked_joints=[
             "Shoulder",
             "Elbow",
+            "Hip",
+            "Knee",
+            "Ankle",
         ],
         dt=args.dt,
     )
@@ -265,8 +283,6 @@ def main() -> None:
             project=args.wandb_project,
             name=output_path.stem,
             config={
-                "logs": str(logs_dir),
-                "model": args.model,
                 "hostname": socket.gethostname(),
                 "sampler": args.sampler,
                 "trials": args.trials,
