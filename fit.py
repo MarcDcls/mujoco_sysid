@@ -18,7 +18,7 @@ import simulate
 from model_wrapper import Actuator, Body, MujocoModelWrapper, Parameter
 
 
-def build_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoModelWrapper:
+def build_fitting_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoModelWrapper:
     arm_actuator = Actuator(
         name="Arm",
         model=model,
@@ -221,7 +221,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Fit MuJoCo model parameters on a directory of logs.")
     parser.add_argument("--logs", type=str, required=None, help="Directory containing logs (model.log).")
     parser.add_argument("--agent-logs", type=str, default=None, help="Directory containing logs to run with a walk agent.")
-    parser.add_argument("--trials", type=int, default=1000000, help="Number of Optuna trials.")
+    parser.add_argument("--trials", type=int, default=100000, help="Number of Optuna trials.")
     parser.add_argument("--workers", type=int, default=1, help="Number of parallel worker processes.")
     parser.add_argument("--seed", type=int, default=0, help="Random seed.")
     parser.add_argument("--dt", type=float, default=0.005, help="Simulation timestep.")
@@ -256,7 +256,7 @@ def main() -> None:
 
     model = mujoco.MjModel.from_xml_path(args.model)
     data = mujoco.MjData(model)
-    wrapper = build_wrapper(model, data)
+    wrapper = build_fitting_wrapper(model, data)
     params = wrapper.get_parameters()
     logs = load_logs(
         log_paths,
