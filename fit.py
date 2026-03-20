@@ -153,6 +153,7 @@ def load_logs(
                 tracked_joints=tracked_joints,
                 dt=dt,
                 agent_path="walk.onnx",
+                infer_frequency=50,
             )
         )
     return logs
