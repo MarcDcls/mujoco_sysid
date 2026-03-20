@@ -34,8 +34,8 @@ def build_fitting_wrapper(model: mujoco.MjModel, data: mujoco.MjData) -> MujocoM
         ],
         frictionloss=Parameter(0.001, 0.0, 1.0),
         damping=Parameter(0.001, 0.0, 1.0),
-        armature=Parameter(0.001, 0.0, 1.0),
-        forcerange=Parameter(10.0, 5.0, 15.0),
+        # armature=Parameter(0.001, 0.0, 1.0),
+        # forcerange=Parameter(10.0, 5.0, 15.0),
     )
 
     hip_roll_actuator = Actuator(
